@@ -18,16 +18,37 @@ STATUSES = ["待移交", "正常养护", "重点观测", "封闭施工"]
 
 @router.get("", response_model=PageResult[dict])
 def list_entries(
-    keyword: str | None = Query(default=None, description="按设施编码检索"),
+    code: str | None = Query(default=None, description="按设施编码检索，大小写与短横线写法不敏感"),
+    name: str | None = Query(default=None, description="按道路名称检索"),
+    level: str | None = Query(default=None, description="按道路等级检索"),
     status: str | None = Query(default=None, description="待移交、正常养护、重点观测、封闭施工"),
     page: int = 1,
     size: int = 20,
 ) -> PageResult[dict]:
-    """按设施编码与状态过滤道路设施列表；没有数据时返回空页，不报错。"""
-    if size > 200:
-        raise HTTPException(status_code=400, detail="每页最多 200 条，请缩小分页范围")
-    items, total = service.list_entries(keyword=keyword, status=status, page=page, size=size)
+    """按设施编码、道路名称、道路等级取交集过滤道路设施列表。
+
+    条件写错或页码越界时返回 400 并说明原因；查不到数据时返回空页，不报错。
+    """
+    items, total, error = service.list_entries(
+        code=code, name=name, level=level, status=status, page=page, size=size
+    )
+    if error:
+        raise HTTPException(status_code=400, detail=error)
     return PageResult(items=items, total=total, page=page, size=size)
+
+
+@router.get("/export")
+def export_entries(
+    code: str | None = Query(default=None, description="同列表的设施编码条件"),
+    name: str | None = Query(default=None, description="同列表的道路名称条件"),
+    level: str | None = Query(default=None, description="同列表的道路等级条件"),
+    status: str | None = Query(default=None, description="同列表的设施状态条件"),
+) -> dict[str, Any]:
+    """导出道路设施清单：与列表共用一套筛选口径，保证两边条数对得上。"""
+    items, error = service.filter_entries(code=code, name=name, level=level, status=status)
+    if error:
+        raise HTTPException(status_code=400, detail=error)
+    return {"module": "road", "total": len(items), "items": items}
 
 
 @router.get("/{entry_id}", response_model=dict)
@@ -56,10 +77,3 @@ def run_action(entry_id: int, payload: EntryPayload) -> ActionResult:
     if entry is None:
         return ActionResult(ok=False, message=message)
     return ActionResult(ok=True, message=message, entry=entry)
-
-
-@router.get("/export")
-def export_entries() -> dict[str, Any]:
-    """导出道路设施清单：返回当前过滤条件下的全量数据。"""
-    items, total = service.list_entries(page=1, size=10000)
-    return {"module": "road", "total": total, "items": items}
